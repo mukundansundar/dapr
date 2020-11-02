@@ -16,7 +16,6 @@ import (
 	"github.com/dapr/components-contrib/secretstores"
 	"github.com/dapr/components-contrib/state"
 	"github.com/dapr/dapr/pkg/actors"
-	"github.com/dapr/dapr/pkg/channel"
 	"github.com/dapr/dapr/pkg/channel/http"
 	"github.com/dapr/dapr/pkg/concurrency"
 	"github.com/dapr/dapr/pkg/config"
@@ -41,7 +40,6 @@ type API interface {
 type api struct {
 	endpoints             []Endpoint
 	directMessaging       messaging.DirectMessaging
-	appChannel            channel.AppChannel
 	stateStores           map[string]state.Store
 	secretStores          map[string]secretstores.SecretStore
 	secretsConfiguration  map[string]config.SecretsScope
@@ -84,7 +82,6 @@ const (
 // NewAPI returns a new API
 func NewAPI(
 	appID string,
-	appChannel channel.AppChannel,
 	directMessaging messaging.DirectMessaging,
 	stateStores map[string]state.Store,
 	secretStores map[string]secretstores.SecretStore,
@@ -94,7 +91,6 @@ func NewAPI(
 	sendToOutputBindingFn func(name string, req *bindings.InvokeRequest) (*bindings.InvokeResponse, error),
 	tracingSpec config.TracingSpec) API {
 	api := &api{
-		appChannel:            appChannel,
 		directMessaging:       directMessaging,
 		stateStores:           stateStores,
 		secretStores:          secretStores,

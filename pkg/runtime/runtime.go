@@ -243,20 +243,6 @@ func (a *DaprRuntime) initRuntime(opts *runtimeOpts) error {
 		return err
 	}
 
-	a.blockUntilAppIsReady()
-
-	a.hostAddress, err = utils.GetHostAddress()
-	if err != nil {
-		return errors.Wrap(err, "failed to determine host address")
-	}
-
-	err = a.createAppChannel()
-	if err != nil {
-		log.Warnf("failed to open %s channel to app: %s", string(a.runtimeConfig.ApplicationProtocol), err)
-	}
-
-	a.loadAppConfiguration()
-
 	// Register and initialize name resolution for service discovery.
 	a.nameResolutionRegistry.Register(opts.nameResolutions...)
 	err = a.initNameResolution()
@@ -293,7 +279,9 @@ func (a *DaprRuntime) initRuntime(opts *runtimeOpts) error {
 
 	// Setup allow/deny list for secrets
 	a.populateSecretsConfiguration()
-	// Create and start internal and external gRPC servers
+
+	// Create and start external gRPC servers
+	// appChannel is not required ... CallLocal is only for internal server
 	grpcAPI := a.getGRPCAPI()
 	err = a.startGRPCAPIServer(grpcAPI, a.runtimeConfig.APIGRPCPort)
 	if err != nil {
@@ -301,16 +289,11 @@ func (a *DaprRuntime) initRuntime(opts *runtimeOpts) error {
 	}
 	log.Infof("API gRPC server is running on port %v", a.runtimeConfig.APIGRPCPort)
 
-	// Start HTTP Server
+	// Start external HTTP Server
 	a.startHTTPServer(a.runtimeConfig.HTTPPort, a.runtimeConfig.ProfilePort, a.runtimeConfig.AllowedOrigins, pipeline)
 	log.Infof("http server is running on port %v", a.runtimeConfig.HTTPPort)
+
 	a.blockUntilAppIsReady()
-	a.initDirectMessaging(a.nameResolver)
-	err = a.startGRPCInternalServer(grpcAPI, a.runtimeConfig.InternalGRPCPort)
-	if err != nil {
-		log.Fatalf("failed to start internal gRPC server: %s", err)
-	}
-	log.Infof("internal gRPC server is running on port %v", a.runtimeConfig.InternalGRPCPort)
 
 	a.hostAddress, err = utils.GetHostAddress()
 	if err != nil {
@@ -322,7 +305,20 @@ func (a *DaprRuntime) initRuntime(opts *runtimeOpts) error {
 		log.Warnf("failed to open %s channel to app: %s", string(a.runtimeConfig.ApplicationProtocol), err)
 	}
 
+	// Create and start internal gRPC server
+	// Get a new gRPC API and set that for internal server
+	grpcAPI = a.getGRPCAPI()
+	err = a.startGRPCInternalServer(grpcAPI, a.runtimeConfig.InternalGRPCPort)
+	if err != nil {
+		log.Fatalf("failed to start internal gRPC server: %s", err)
+	}
+	log.Infof("internal gRPC server is running on port %v", a.runtimeConfig.InternalGRPCPort)
+
+	// loading app configuration requires appChannel
 	a.loadAppConfiguration()
+
+	// Direct Messaging can only be started after the appChannel is created
+	a.initDirectMessaging(a.nameResolver)
 
 	err = a.initActors()
 	if err != nil {
@@ -649,6 +645,14 @@ func (a *DaprRuntime) sendBindingEventToApp(bindingName string, data []byte, met
 }
 
 func (a *DaprRuntime) readFromBinding(name string, binding bindings.InputBinding) error {
+	if a.appChannel == nil {
+		return errors.New("app channel not initialized")
+	}
+	subscribed := a.isAppSubscribedToBinding(name)
+	if !subscribed {
+		log.Warnf("app not subscribed to input binding %s", name)
+		return nil
+	}
 	err := binding.Read(func(resp *bindings.ReadResponse) error {
 		if resp != nil {
 			err := a.sendBindingEventToApp(name, resp.Data, resp.Metadata)
@@ -663,7 +667,7 @@ func (a *DaprRuntime) readFromBinding(name string, binding bindings.InputBinding
 }
 
 func (a *DaprRuntime) startHTTPServer(port, profilePort int, allowedOrigins string, pipeline http_middleware.Pipeline) {
-	a.daprHTTPAPI = http.NewAPI(a.runtimeConfig.ID, a.appChannel, a.directMessaging, a.stateStores, a.secretStores,
+	a.daprHTTPAPI = http.NewAPI(a.runtimeConfig.ID, a.directMessaging, a.stateStores, a.secretStores,
 		a.secretsConfiguration, a.getPublishAdapter(), a.actor, a.sendToOutputBinding, a.globalConfig.Spec.TracingSpec)
 	serverConf := http.NewServerConfig(a.runtimeConfig.ID, a.hostAddress, port, profilePort, allowedOrigins, a.runtimeConfig.EnableProfiling)
 
@@ -746,13 +750,6 @@ func (a *DaprRuntime) isAppSubscribedToBinding(binding string) bool {
 }
 
 func (a *DaprRuntime) initInputBinding(c components_v1alpha1.Component) error {
-	if a.appChannel == nil {
-		return errors.New("app channel not initialized")
-	}
-	subscribed := a.isAppSubscribedToBinding(c.ObjectMeta.Name)
-	if !subscribed {
-		return nil
-	}
 
 	binding, err := a.bindingsRegistry.CreateInputBinding(c.Spec.Type)
 	if err != nil {
