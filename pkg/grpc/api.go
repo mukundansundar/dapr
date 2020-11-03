@@ -41,6 +41,12 @@ const (
 
 // API is the gRPC interface for the Dapr gRPC API. It implements both the internal and external proto definitions.
 type API interface {
+
+	// Setters
+	SetActor(actors.Actors)
+	SetAppChannel(channel.AppChannel)
+	SetDirectMessaging(messaging.DirectMessaging)
+
 	// DaprInternal Service methods
 	CallActor(ctx context.Context, in *internalv1pb.InternalInvokeRequest) (*internalv1pb.InternalInvokeResponse, error)
 	CallLocal(ctx context.Context, in *internalv1pb.InternalInvokeRequest) (*internalv1pb.InternalInvokeResponse, error)
@@ -99,6 +105,18 @@ func NewAPI(
 		accessControlList:     accessControlList,
 		appProtocol:           appProtocol,
 	}
+}
+
+func (a *api) SetActor(actor actors.Actors) {
+	a.actor = actor
+}
+
+func (a *api) SetDirectMessaging(dm messaging.DirectMessaging) {
+	a.directMessaging = dm
+}
+
+func (a *api) SetAppChannel(appChannel channel.AppChannel) {
+	a.appChannel = appChannel
 }
 
 // CallLocal is used for internal dapr to dapr calls. It is invoked by another Dapr instance with a request to the local app.

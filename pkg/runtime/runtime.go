@@ -133,6 +133,8 @@ type DaprRuntime struct {
 	scopedPublishings      map[string][]string
 	allowedTopics          map[string][]string
 	daprHTTPAPI            http.API
+	grpcExternalAPI        grpc.API
+	grpcInternalAPI        grpc.API
 	operatorClient         operatorv1pb.OperatorClient
 	topicRoutes            map[string]TopicRoute
 
@@ -243,7 +245,13 @@ func (a *DaprRuntime) initRuntime(opts *runtimeOpts) error {
 		return err
 	}
 
+	a.hostAddress, err = utils.GetHostAddress()
+	if err != nil {
+		return errors.Wrap(err, "failed to determine host address")
+	}
+
 	// Register and initialize name resolution for service discovery.
+	// hostAddress is needed for Standalone
 	a.nameResolutionRegistry.Register(opts.nameResolutions...)
 	err = a.initNameResolution()
 	if err != nil {
@@ -280,9 +288,12 @@ func (a *DaprRuntime) initRuntime(opts *runtimeOpts) error {
 	// Setup allow/deny list for secrets
 	a.populateSecretsConfiguration()
 
+	// http and grpc api depends on initDirectMessaging
 	// Create and start external gRPC servers
 	// appChannel is not required ... CallLocal is only for internal server
+	log.Info("starting gRPC external server")
 	grpcAPI := a.getGRPCAPI()
+	a.grpcExternalAPI = grpcAPI
 	err = a.startGRPCAPIServer(grpcAPI, a.runtimeConfig.APIGRPCPort)
 	if err != nil {
 		log.Fatalf("failed to start API gRPC server: %s", err)
@@ -290,40 +301,49 @@ func (a *DaprRuntime) initRuntime(opts *runtimeOpts) error {
 	log.Infof("API gRPC server is running on port %v", a.runtimeConfig.APIGRPCPort)
 
 	// Start external HTTP Server
+	log.Info("starting HTTP external server")
 	a.startHTTPServer(a.runtimeConfig.HTTPPort, a.runtimeConfig.ProfilePort, a.runtimeConfig.AllowedOrigins, pipeline)
 	log.Infof("http server is running on port %v", a.runtimeConfig.HTTPPort)
 
-	a.blockUntilAppIsReady()
-
-	a.hostAddress, err = utils.GetHostAddress()
-	if err != nil {
-		return errors.Wrap(err, "failed to determine host address")
-	}
-
-	err = a.createAppChannel()
-	if err != nil {
-		log.Warnf("failed to open %s channel to app: %s", string(a.runtimeConfig.ApplicationProtocol), err)
-	}
-
 	// Create and start internal gRPC server
 	// Get a new gRPC API and set that for internal server
+	log.Info("starting gRPC internal server")
 	grpcAPI = a.getGRPCAPI()
+	a.grpcInternalAPI = grpcAPI
 	err = a.startGRPCInternalServer(grpcAPI, a.runtimeConfig.InternalGRPCPort)
 	if err != nil {
 		log.Fatalf("failed to start internal gRPC server: %s", err)
 	}
 	log.Infof("internal gRPC server is running on port %v", a.runtimeConfig.InternalGRPCPort)
 
-	// loading app configuration requires appChannel
-	a.loadAppConfiguration()
+	a.blockUntilAppIsReady()
+	err = a.createAppChannel()
+	if err != nil {
+		log.Warnf("failed to open %s channel to app: %s", string(a.runtimeConfig.ApplicationProtocol), err)
+	}
+
+	a.grpcInternalAPI.SetAppChannel(a.appChannel)
+	a.grpcExternalAPI.SetAppChannel(a.appChannel)
+	a.daprHTTPAPI.SetAppChannel(a.appChannel)
 
 	// Direct Messaging can only be started after the appChannel is created
 	a.initDirectMessaging(a.nameResolver)
+
+	a.grpcInternalAPI.SetDirectMessaging(a.directMessaging)
+	a.grpcExternalAPI.SetDirectMessaging(a.directMessaging)
+	a.daprHTTPAPI.SetDirectMessaging(a.directMessaging)
+
+	// loading app configuration requires appChannel
+	a.loadAppConfiguration()
 
 	err = a.initActors()
 	if err != nil {
 		log.Warnf("failed to init actors: %s", err)
 	}
+
+	a.grpcExternalAPI.SetActor(a.actor)
+	a.grpcInternalAPI.SetActor(a.actor)
+	a.daprHTTPAPI.SetActor(a.actor)
 
 	a.startSubscribing()
 	a.startReadingFromBinding()

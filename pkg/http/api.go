@@ -16,6 +16,7 @@ import (
 	"github.com/dapr/components-contrib/secretstores"
 	"github.com/dapr/components-contrib/state"
 	"github.com/dapr/dapr/pkg/actors"
+	"github.com/dapr/dapr/pkg/channel"
 	"github.com/dapr/dapr/pkg/channel/http"
 	"github.com/dapr/dapr/pkg/concurrency"
 	"github.com/dapr/dapr/pkg/config"
@@ -33,6 +34,11 @@ import (
 
 // API returns a list of HTTP endpoints for Dapr
 type API interface {
+	// Setters
+	SetActor(actors.Actors)
+	SetAppChannel(channel.AppChannel)
+	SetDirectMessaging(messaging.DirectMessaging)
+
 	APIEndpoints() []Endpoint
 	MarkStatusAsReady()
 }
@@ -112,6 +118,18 @@ func NewAPI(
 	api.endpoints = append(api.endpoints, api.constructHealthzEndpoints()...)
 
 	return api
+}
+
+func (a *api) SetActor(actor actors.Actors) {
+	a.actor = actor
+}
+
+func (a *api) SetDirectMessaging(dm messaging.DirectMessaging) {
+	a.directMessaging = dm
+}
+
+func (a *api) SetAppChannel(_ channel.AppChannel) {
+	// noop
 }
 
 // APIEndpoints returns the list of registered endpoints
